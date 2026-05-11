@@ -14,9 +14,15 @@ public class OrbitGlobeController : MonoBehaviour
     public double latitude = 0;
     public double height = 30000000;
 
+    [Header("Startup View")]
+    public bool startInOverview = true;
+    public double overviewHeight = 50000000;
+    public bool lookAtEarthCenter = true;
+    public bool addStarfield = false;
+
     [Header("Limits")]
     public double minHeight = 3000;
-    public double maxHeight = 50000000;
+    public double maxHeight = 60000000;
     public double minLatitude = -85;
     public double maxLatitude = 85;
 
@@ -24,12 +30,16 @@ public class OrbitGlobeController : MonoBehaviour
     public double rotateSpeed = 0.03;
     public double zoomSpeed = 300000;
     public float smoothSpeed = 10;
+    public float dragSmoothing = 18f;
+    public float inertiaDamping = 8f;
 
     private double targetLongitude;
     private double targetLatitude;
     private double targetHeight;
 
     private Vector2 lastMousePosition;
+    private Vector2 dragVelocity;
+    private bool isDragging;
 
     void Start()
     {
@@ -38,6 +48,14 @@ public class OrbitGlobeController : MonoBehaviour
 
         if (georeference == null)
             georeference = FindObjectOfType<CesiumGeoreference>();
+
+        ConfigureCameraForSpaceView();
+
+        if (startInOverview)
+        {
+            maxHeight = System.Math.Max(maxHeight, overviewHeight);
+            height = overviewHeight;
+        }
 
         targetLongitude = longitude;
         targetLatitude = latitude;
@@ -56,29 +74,84 @@ public class OrbitGlobeController : MonoBehaviour
 
     void HandleDrag()
     {
-        if (Mouse.current == null) return;
-
-        if (Mouse.current.leftButton.wasPressedThisFrame)
+        if (TryReadPointer(out Vector2 pointerPosition, out bool pressedThisFrame, out bool isPressed))
         {
-            lastMousePosition = Mouse.current.position.ReadValue();
+            if (pressedThisFrame)
+            {
+                lastMousePosition = pointerPosition;
+                dragVelocity = Vector2.zero;
+                isDragging = true;
+                return;
+            }
+
+            if (isPressed && isDragging)
+            {
+                Vector2 delta = pointerPosition - lastMousePosition;
+                Vector2 clampedDelta = Vector2.ClampMagnitude(delta, 35f);
+                float smoothing = 1f - Mathf.Exp(-dragSmoothing * Time.deltaTime);
+
+                dragVelocity = Vector2.Lerp(dragVelocity, clampedDelta, smoothing);
+                ApplyDragDelta(dragVelocity);
+
+                lastMousePosition = pointerPosition;
+                return;
+            }
         }
 
-        if (Mouse.current.leftButton.isPressed)
+        isDragging = false;
+
+        if (dragVelocity.sqrMagnitude > 0.01f)
         {
-            Vector2 current = Mouse.current.position.ReadValue();
-            Vector2 delta = current - lastMousePosition;
-
-            double dx = Mathf.Clamp(delta.x, -20f, 20f);
-            double dy = Mathf.Clamp(delta.y, -20f, 20f);
-
-            targetLongitude -= dx * rotateSpeed;
-            targetLatitude += dy * rotateSpeed;
-
-            targetLatitude = Clamp(targetLatitude, minLatitude, maxLatitude);
-            targetLongitude = NormalizeLongitude(targetLongitude);
-
-            lastMousePosition = current;
+            ApplyDragDelta(dragVelocity);
+            dragVelocity = Vector2.Lerp(
+                dragVelocity,
+                Vector2.zero,
+                1f - Mathf.Exp(-inertiaDamping * Time.deltaTime)
+            );
         }
+    }
+
+    bool TryReadPointer(out Vector2 position, out bool pressedThisFrame, out bool isPressed)
+    {
+        if (Touchscreen.current != null)
+        {
+            var touch = Touchscreen.current.primaryTouch;
+            if (touch.press.isPressed || touch.press.wasPressedThisFrame)
+            {
+                position = touch.position.ReadValue();
+                pressedThisFrame = touch.press.wasPressedThisFrame;
+                isPressed = touch.press.isPressed;
+                return true;
+            }
+        }
+
+        if (Mouse.current != null)
+        {
+            position = Mouse.current.position.ReadValue();
+            pressedThisFrame = Mouse.current.leftButton.wasPressedThisFrame;
+            isPressed = Mouse.current.leftButton.isPressed;
+            return pressedThisFrame || isPressed;
+        }
+
+        position = Vector2.zero;
+        pressedThisFrame = false;
+        isPressed = false;
+        return false;
+    }
+
+    void ApplyDragDelta(Vector2 delta)
+    {
+        double heightFactor = Mathf.Lerp(0.35f, 1.4f, Mathf.InverseLerp(
+            (float)minHeight,
+            (float)maxHeight,
+            (float)targetHeight
+        ));
+
+        targetLongitude -= delta.x * rotateSpeed * heightFactor;
+        targetLatitude -= delta.y * rotateSpeed * heightFactor;
+
+        targetLatitude = Clamp(targetLatitude, minLatitude, maxLatitude);
+        targetLongitude = NormalizeLongitude(targetLongitude);
     }
 
     void HandleZoom()
@@ -99,7 +172,8 @@ public class OrbitGlobeController : MonoBehaviour
 
         if (System.Math.Abs(zoomDelta) > 0.01)
         {
-            targetHeight -= zoomDelta * zoomSpeed;
+            double zoomFactor = System.Math.Max(0.1, targetHeight / 30000000.0);
+            targetHeight -= zoomDelta * zoomSpeed * zoomFactor;
             targetHeight = Clamp(targetHeight, minHeight, maxHeight);
         }
     }
@@ -108,18 +182,18 @@ public class OrbitGlobeController : MonoBehaviour
     {
         float t = 1f - Mathf.Exp(-smoothSpeed * Time.deltaTime);
 
-    longitude = Mathf.LerpAngle(
-        (float)longitude,
-        (float)targetLongitude,
-        t
-    );
+        longitude = Mathf.LerpAngle(
+            (float)longitude,
+            (float)targetLongitude,
+            t
+        );
 
-    latitude = LerpDouble(latitude, targetLatitude, t);
-    height = LerpDouble(height, targetHeight, t);
+        latitude = LerpDouble(latitude, targetLatitude, t);
+        height = LerpDouble(height, targetHeight, t);
 
-    latitude = Clamp(latitude, minLatitude, maxLatitude);
-    longitude = NormalizeLongitude(longitude);
-    height = Clamp(height, minHeight, maxHeight);
+        latitude = Clamp(latitude, minLatitude, maxLatitude);
+        longitude = NormalizeLongitude(longitude);
+        height = Clamp(height, minHeight, maxHeight);
     }
 
     void Apply()
@@ -150,24 +224,72 @@ public class OrbitGlobeController : MonoBehaviour
 
     void LookAtSurfacePoint()
     {
-        double3 targetLlh = new double3(longitude, latitude, 0);
+        Vector3 target;
 
-        double3 targetEcef =
-            georeference.ellipsoid.LongitudeLatitudeHeightToCenteredFixed(targetLlh);
+        if (lookAtEarthCenter)
+        {
+            double3 centerUnity = georeference.TransformEarthCenteredEarthFixedPositionToUnity(double3.zero);
+            target = new Vector3(
+                (float)centerUnity.x,
+                (float)centerUnity.y,
+                (float)centerUnity.z
+            );
+        }
+        else
+        {
+            double3 targetLlh = new double3(longitude, latitude, 0);
 
-        double3 targetUnity =
-            georeference.TransformEarthCenteredEarthFixedPositionToUnity(targetEcef);
+            double3 targetEcef =
+                georeference.ellipsoid.LongitudeLatitudeHeightToCenteredFixed(targetLlh);
 
-        Vector3 target = new Vector3(
-            (float)targetUnity.x,
-            (float)targetUnity.y,
-            (float)targetUnity.z
-        );
+            double3 targetUnity =
+                georeference.TransformEarthCenteredEarthFixedPositionToUnity(targetEcef);
+
+            target = new Vector3(
+                (float)targetUnity.x,
+                (float)targetUnity.y,
+                (float)targetUnity.z
+            );
+        }
 
         Vector3 direction = target - transform.position;
 
         if (direction.sqrMagnitude > 0.001f)
-            transform.rotation = Quaternion.LookRotation(direction.normalized, transform.up);
+            transform.rotation = Quaternion.LookRotation(direction.normalized, GetCameraUp(direction.normalized, target));
+    }
+
+    Vector3 GetCameraUp(Vector3 forward, Vector3 target)
+    {
+        double3 northPoleEcef = georeference.ellipsoid.LongitudeLatitudeHeightToCenteredFixed(
+            new double3(0, 90, 0)
+        );
+
+        double3 northPoleUnity = georeference.TransformEarthCenteredEarthFixedPositionToUnity(northPoleEcef);
+        Vector3 north = new Vector3(
+            (float)northPoleUnity.x,
+            (float)northPoleUnity.y,
+            (float)northPoleUnity.z
+        );
+
+        Vector3 up = Vector3.ProjectOnPlane(north - target, forward);
+        if (up.sqrMagnitude < 0.001f)
+            up = Vector3.ProjectOnPlane(Vector3.up, forward);
+
+        return up.normalized;
+    }
+
+    void ConfigureCameraForSpaceView()
+    {
+        Camera camera = GetComponent<Camera>();
+        if (camera == null) return;
+
+        camera.clearFlags = CameraClearFlags.SolidColor;
+        camera.backgroundColor = Color.black;
+        camera.nearClipPlane = Mathf.Min(camera.nearClipPlane, 0.5f);
+        camera.farClipPlane = Mathf.Max(camera.farClipPlane, 200000000f);
+
+        if (addStarfield && GetComponent<StarfieldBackground>() == null)
+            gameObject.AddComponent<StarfieldBackground>();
     }
 
     double NormalizeLongitude(double value)
