@@ -8,6 +8,7 @@ public static class MockPlaceDataSource
             {
                 new PlaceData
                 {
+                    id = "tokyo",
                     name = "Tokyo",
                     longitude = 139.6917,
                     latitude = 35.6895,
@@ -15,6 +16,7 @@ public static class MockPlaceDataSource
                 },
                 new PlaceData
                 {
+                    id = "bali",
                     name = "Bali",
                     longitude = 115.1889,
                     latitude = -8.4095,

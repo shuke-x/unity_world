@@ -3,7 +3,7 @@ using UnityEngine;
 [RequireComponent(typeof(Camera))]
 public class StarfieldBackground : MonoBehaviour
 {
-    public Color backgroundColor = Color.black;
+    public Color backgroundColor = new Color(0f, 0f, 0f, 0f);
 
     void Start()
     {

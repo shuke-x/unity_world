@@ -2,6 +2,7 @@ using UnityEngine;
 using UnityEngine.InputSystem;
 using CesiumForUnity;
 using Unity.Mathematics;
+using System.Globalization;
 
 public class OrbitGlobeController : MonoBehaviour
 {
@@ -12,13 +13,18 @@ public class OrbitGlobeController : MonoBehaviour
     [Header("Current Position")]
     public double longitude = 115;
     public double latitude = 0;
-    public double height = 30000000;
+    public double height = 18000000;
 
     [Header("Startup View")]
     public bool startInOverview = true;
-    public double overviewHeight = 50000000;
+    public double overviewHeight = 18000000;
     public bool lookAtEarthCenter = true;
+    public bool transparentBackground = true;
     public bool addStarfield = false;
+
+    [Header("View Framing")]
+    public bool applyFieldOfView = true;
+    public float fieldOfView = 45f;
 
     [Header("Limits")]
     public double minHeight = 3000;
@@ -33,6 +39,18 @@ public class OrbitGlobeController : MonoBehaviour
     public float dragSmoothing = 18f;
     public float inertiaDamping = 8f;
 
+    [Header("Interaction Control")]
+    public bool gesturesEnabled = true;
+    public bool autoRotateEnabled = false;
+    public double autoRotateSpeed = 2.0;
+    public bool autoRotatePausesWhileDragging = true;
+
+    [Header("Flutter Integration")]
+    public double cityViewHeight = 1000000;
+    public double poiViewHeight = 50000;
+    public bool sendCameraUpdates = true;
+    public float cameraUpdateInterval = 0.5f;
+
     private double targetLongitude;
     private double targetLatitude;
     private double targetHeight;
@@ -40,6 +58,222 @@ public class OrbitGlobeController : MonoBehaviour
     private Vector2 lastMousePosition;
     private Vector2 dragVelocity;
     private bool isDragging;
+
+    private float _cameraUpdateTimer;
+
+    // ════════════════════════════════════════════════════════════
+    //                  Flutter → Unity
+    //   public + 一个 string 参数 = 可被 Flutter 调用
+    // ════════════════════════════════════════════════════════════
+
+    /// Flutter: sendToUnity('GlobeCamera', 'FocusOnCity', '{"id":"tokyo","lng":139.69,"lat":35.68}')
+    public void FocusOnCity(string json)
+    {
+        Debug.Log($"[OrbitGlobe] FocusOnCity: {json}");
+        try
+        {
+            var data = JsonUtility.FromJson<CityFocusData>(json);
+            FlyTo(data.lng, data.lat, cityViewHeight);
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogError($"FocusOnCity parse error: {e.Message}");
+        }
+    }
+
+    public void FocusOnPoi(string json)
+    {
+        Debug.Log($"[OrbitGlobe] FocusOnPoi: {json}");
+        try
+        {
+            var data = JsonUtility.FromJson<PoiFocusData>(json);
+            FlyTo(data.lng, data.lat, poiViewHeight);
+
+            SendMsgToFlutter("poi.focused", new PoiFocusedData { id = data.id });
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogError($"FocusOnPoi parse error: {e.Message}");
+        }
+    }
+
+    public void ResetView(string _ = "")
+    {
+        FlyTo(115, 0, overviewHeight);
+    }
+
+    public void SetCamera(string json)
+    {
+        try
+        {
+            var data = JsonUtility.FromJson<CameraData>(json);
+            targetLongitude = NormalizeLongitude(data.lng);
+            targetLatitude = Clamp(data.lat, minLatitude, maxLatitude);
+            targetHeight = Clamp(data.height, minHeight, maxHeight);
+
+            longitude = targetLongitude;
+            latitude = targetLatitude;
+            height = targetHeight;
+
+            Apply();
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogError($"SetCamera parse error: {e.Message}");
+        }
+    }
+
+    public void SetCameraHeight(string value)
+    {
+        if (TryParseDoubleControl(value, out double nextHeight))
+        {
+            SetCameraHeightValue(nextHeight);
+            return;
+        }
+
+        Debug.LogWarning($"SetCameraHeight parse error: {value}");
+    }
+
+    public void SetCameraHeightValue(double nextHeight)
+    {
+        targetHeight = Clamp(nextHeight, minHeight, maxHeight);
+    }
+
+    public void SetOverviewHeight(string value)
+    {
+        if (TryParseDoubleControl(value, out double nextHeight))
+        {
+            overviewHeight = Clamp(nextHeight, minHeight, maxHeight);
+            return;
+        }
+
+        Debug.LogWarning($"SetOverviewHeight parse error: {value}");
+    }
+
+    public void SetFieldOfView(string value)
+    {
+        if (TryParseFloatControl(value, out float nextFieldOfView))
+        {
+            SetFieldOfViewValue(nextFieldOfView);
+            return;
+        }
+
+        Debug.LogWarning($"SetFieldOfView parse error: {value}");
+    }
+
+    public void SetFieldOfViewValue(float nextFieldOfView)
+    {
+        Camera camera = GetComponent<Camera>();
+        if (camera == null) return;
+
+        applyFieldOfView = true;
+        fieldOfView = Mathf.Clamp(nextFieldOfView, 15f, 90f);
+        camera.fieldOfView = fieldOfView;
+    }
+
+    public void SetGesturesEnabledValue(bool enabled)
+    {
+        gesturesEnabled = enabled;
+
+        if (!gesturesEnabled)
+            ResetGestureState();
+    }
+
+    public void SetGesturesEnabled(string value)
+    {
+        if (TryParseBoolControl(value, out bool enabled))
+        {
+            SetGesturesEnabledValue(enabled);
+            return;
+        }
+
+        Debug.LogWarning($"SetGesturesEnabled parse error: {value}");
+    }
+
+    public void EnableGestures(string _ = "")
+    {
+        SetGesturesEnabledValue(true);
+    }
+
+    public void DisableGestures(string _ = "")
+    {
+        SetGesturesEnabledValue(false);
+    }
+
+    public void SetAutoRotateEnabledValue(bool enabled)
+    {
+        autoRotateEnabled = enabled;
+    }
+
+    public void SetAutoRotateEnabled(string value)
+    {
+        if (TryParseBoolControl(value, out bool enabled))
+        {
+            SetAutoRotateEnabledValue(enabled);
+            return;
+        }
+
+        Debug.LogWarning($"SetAutoRotateEnabled parse error: {value}");
+    }
+
+    public void EnableAutoRotate(string _ = "")
+    {
+        SetAutoRotateEnabledValue(true);
+    }
+
+    public void DisableAutoRotate(string _ = "")
+    {
+        SetAutoRotateEnabledValue(false);
+    }
+
+    public void SetAutoRotateSpeedValue(double speed)
+    {
+        autoRotateSpeed = speed;
+    }
+
+    public void SetAutoRotateSpeed(string value)
+    {
+        if (TryParseDoubleControl(value, out double speed))
+        {
+            SetAutoRotateSpeedValue(speed);
+            return;
+        }
+
+        Debug.LogWarning($"SetAutoRotateSpeed parse error: {value}");
+    }
+
+    // ════════════════════════════════════════════════════════════
+    //                  Unity → Flutter
+    // ════════════════════════════════════════════════════════════
+
+    public void SendCameraStateToFlutter()
+    {
+        SendMsgToFlutter("camera.changed", new CameraData
+        {
+            lng = (float)longitude,
+            lat = (float)latitude,
+            height = (float)height,
+        });
+    }
+
+    /// 把结构化事件 (evt, data) 包成 envelope 发给 Flutter
+    void SendMsgToFlutter(string evt, object data)
+    {
+        var dataJson = JsonUtility.ToJson(data);
+        var envelope = "{\"evt\":\"" + evt + "\",\"data\":" + dataJson + "}";
+        SendToFlutter.Send(envelope);   // ← unitypackage 提供的全局 SendToFlutter 类
+    }
+
+    void FlyTo(double lng, double lat, double targetH)
+    {
+        targetLongitude = NormalizeLongitude(lng);
+        targetLatitude = Clamp(lat, minLatitude, maxLatitude);
+        targetHeight = Clamp(targetH, minHeight, maxHeight);
+    }
+
+    // ════════════════════════════════════════════════════════════
+    //               以下是你原有的代码，未改动
+    // ════════════════════════════════════════════════════════════
 
     void Start()
     {
@@ -62,14 +296,50 @@ public class OrbitGlobeController : MonoBehaviour
         targetHeight = height;
 
         ApplyImmediate();
+
+        // 通知 Flutter, Unity 已经准备好
+        SendMsgToFlutter("ready", new ReadyData { version = "1.0.0" });
     }
 
     void Update()
     {
-        HandleDrag();
-        HandleZoom();
+        if (gesturesEnabled)
+        {
+            HandleDrag();
+            HandleZoom();
+        }
+        else
+        {
+            ResetGestureState();
+        }
+
+        HandleAutoRotate();
         SmoothMove();
         Apply();
+
+        if (sendCameraUpdates)
+        {
+            _cameraUpdateTimer += Time.deltaTime;
+            if (_cameraUpdateTimer >= cameraUpdateInterval)
+            {
+                _cameraUpdateTimer = 0;
+                if (isDragging || dragVelocity.sqrMagnitude > 0.1f)
+                {
+                    SendCameraStateToFlutter();
+                }
+            }
+        }
+    }
+
+    void HandleAutoRotate()
+    {
+        if (!autoRotateEnabled || System.Math.Abs(autoRotateSpeed) < 0.0001)
+            return;
+
+        if (autoRotatePausesWhileDragging && (isDragging || dragVelocity.sqrMagnitude > 0.01f))
+            return;
+
+        targetLongitude = NormalizeLongitude(targetLongitude + autoRotateSpeed * Time.deltaTime);
     }
 
     void HandleDrag()
@@ -109,6 +379,12 @@ public class OrbitGlobeController : MonoBehaviour
                 1f - Mathf.Exp(-inertiaDamping * Time.deltaTime)
             );
         }
+    }
+
+    void ResetGestureState()
+    {
+        isDragging = false;
+        dragVelocity = Vector2.zero;
     }
 
     bool TryReadPointer(out Vector2 position, out bool pressedThisFrame, out bool isPressed)
@@ -284,9 +560,12 @@ public class OrbitGlobeController : MonoBehaviour
         if (camera == null) return;
 
         camera.clearFlags = CameraClearFlags.SolidColor;
-        camera.backgroundColor = Color.black;
+        camera.backgroundColor = transparentBackground ? new Color(0f, 0f, 0f, 0f) : Color.black;
+        if (applyFieldOfView)
+            camera.fieldOfView = Mathf.Clamp(fieldOfView, 15f, 90f);
         camera.nearClipPlane = Mathf.Min(camera.nearClipPlane, 0.5f);
         camera.farClipPlane = Mathf.Max(camera.farClipPlane, 200000000f);
+        RenderSettings.skybox = null;
 
         if (addStarfield && GetComponent<StarfieldBackground>() == null)
             gameObject.AddComponent<StarfieldBackground>();
@@ -307,5 +586,107 @@ public class OrbitGlobeController : MonoBehaviour
     double LerpDouble(double a, double b, float t)
     {
         return a + (b - a) * t;
+    }
+
+    bool TryParseBoolControl(string value, out bool result)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            result = true;
+            return true;
+        }
+
+        string normalized = value.Trim().Trim('"').ToLowerInvariant();
+
+        if (normalized == "true" || normalized == "1" || normalized == "on" ||
+            normalized == "yes" || normalized == "enable" || normalized == "enabled")
+        {
+            result = true;
+            return true;
+        }
+
+        if (normalized == "false" || normalized == "0" || normalized == "off" ||
+            normalized == "no" || normalized == "disable" || normalized == "disabled")
+        {
+            result = false;
+            return true;
+        }
+
+        result = false;
+        return false;
+    }
+
+    bool TryParseDoubleControl(string value, out double result)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            result = 0;
+            return false;
+        }
+
+        string normalized = value.Trim().Trim('"');
+        return double.TryParse(
+            normalized,
+            NumberStyles.Float,
+            CultureInfo.InvariantCulture,
+            out result
+        );
+    }
+
+    bool TryParseFloatControl(string value, out float result)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            result = 0;
+            return false;
+        }
+
+        string normalized = value.Trim().Trim('"');
+        return float.TryParse(
+            normalized,
+            NumberStyles.Float,
+            CultureInfo.InvariantCulture,
+            out result
+        );
+    }
+
+    // ════════════════════════════════════════════════════════════
+    //                 数据契约（与 Flutter 端约定）
+    // ════════════════════════════════════════════════════════════
+
+    [System.Serializable]
+    public class CityFocusData
+    {
+        public string id;
+        public float lng;
+        public float lat;
+    }
+
+    [System.Serializable]
+    public class PoiFocusData
+    {
+        public string id;
+        public float lng;
+        public float lat;
+    }
+
+    [System.Serializable]
+    public class CameraData
+    {
+        public float lng;
+        public float lat;
+        public float height;
+    }
+
+    [System.Serializable]
+    public class PoiFocusedData
+    {
+        public string id;
+    }
+
+    [System.Serializable]
+    public class ReadyData
+    {
+        public string version;
     }
 }

@@ -41,6 +41,8 @@ public class MarkerManager : MonoBehaviour
 
     void LoadPlaces(PlaceList list)
     {
+        ClearMarkers();
+
         if (list == null || list.places == null)
         {
             Debug.LogError("No place data available.");
@@ -49,22 +51,27 @@ public class MarkerManager : MonoBehaviour
 
         foreach (PlaceData place in list.places)
         {
-            AddMarker(
-                place.name,
-                place.longitude,
-                place.latitude,
-                place.height
-            );
+            AddMarker(place);
         }
     }
 
-    void AddMarker(string name, double lon, double lat, double height)
+    void ClearMarkers()
+    {
+        for (int childIndex = transform.childCount - 1; childIndex >= 0; childIndex--)
+        {
+            Destroy(transform.GetChild(childIndex).gameObject);
+        }
+    }
+
+    void AddMarker(PlaceData place)
     {
         GameObject marker;
+        string markerId = string.IsNullOrEmpty(place.id) ? place.name : place.id;
+        string markerName = string.IsNullOrEmpty(place.name) ? markerId : place.name;
 
         if (createRuntimePin)
         {
-            marker = CreateMapPin(name);
+            marker = CreateMapPin(markerName);
             marker.transform.SetParent(transform, false);
         }
         else
@@ -78,7 +85,7 @@ public class MarkerManager : MonoBehaviour
             marker = Instantiate(markerPrefab, transform);
         }
 
-        marker.name = name;
+        marker.name = markerId;
         marker.transform.localPosition = Vector3.zero;
         marker.transform.localRotation = Quaternion.identity;
         marker.transform.localScale = Vector3.one * markerScale;
@@ -88,9 +95,9 @@ public class MarkerManager : MonoBehaviour
             anchor = marker.AddComponent<CesiumGlobeAnchor>();
 
         anchor.longitudeLatitudeHeight = new double3(
-            lon,
-            lat,
-            height
+            place.longitude,
+            place.latitude,
+            place.height
         );
 
         var orientation = marker.GetComponent<GlobeMarkerOrientation>();
@@ -103,8 +110,10 @@ public class MarkerManager : MonoBehaviour
             if (click == null)
                 click = marker.AddComponent<MarkerClick>();
 
-            click.longitude = lon;
-            click.latitude = lat;
+            click.cityId = markerId;
+            click.displayName = markerName;
+            click.longitude = place.longitude;
+            click.latitude = place.latitude;
         }
     }
 

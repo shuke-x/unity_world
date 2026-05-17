@@ -1314,14 +1314,31 @@ MonoBehaviour:
   georeference: {fileID: 0}
   longitude: 115
   latitude: 0
-  height: 30000000
+  height: 18000000
+  startInOverview: 1
+  overviewHeight: 18000000
+  lookAtEarthCenter: 1
+  transparentBackground: 1
+  addStarfield: 0
+  applyFieldOfView: 1
+  fieldOfView: 45
   minHeight: 3000
-  maxHeight: 40000000
+  maxHeight: 60000000
   minLatitude: -85
   maxLatitude: 85
   rotateSpeed: 0.08
   zoomSpeed: 300000
   smoothSpeed: 10
+  dragSmoothing: 18
+  inertiaDamping: 8
+  gesturesEnabled: 1
+  autoRotateEnabled: 0
+  autoRotateSpeed: 2
+  autoRotatePausesWhileDragging: 1
+  cityViewHeight: 1000000
+  poiViewHeight: 50000
+  sendCameraUpdates: 1
+  cameraUpdateInterval: 0.5
 --- !u!1 &1938078579
 GameObject:
   m_ObjectHideFlags: 0
@@ -1418,7 +1435,7 @@ MonoBehaviour:
   _showTilesInHierarchy: 0
   _updateInEditor: 1
   _logSelectionStats: 0
-  _createPhysicsMeshes: 1
+  _createPhysicsMeshes: 0
 --- !u!1 &1957802047
 GameObject:
   m_ObjectHideFlags: 0
